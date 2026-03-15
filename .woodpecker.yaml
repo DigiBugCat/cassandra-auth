@@ -45,8 +45,8 @@ steps:
       - cd worker
       - npm install
       # Write acl.yaml from secret (contains policy, gitignored in source)
-      - mkdir -p ../../../env || true
-      - echo "$ACL_YAML" > ../../../env/acl.yaml
+      - mkdir -p ../env || true
+      - echo "$ACL_YAML" > ../env/acl.yaml
       - |
         node -e "
         const fs = require('fs');

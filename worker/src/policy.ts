@@ -3,7 +3,7 @@
  * The YAML is baked into the worker bundle — no D1 or external push needed.
  * To update policy: edit env/acl.yaml and redeploy.
  */
-import aclYaml from "../../../env/acl.yaml";
+import aclYaml from "../../env/acl.yaml";
 import { parse } from "yaml";
 import type { PolicyLine } from "./types";
 
