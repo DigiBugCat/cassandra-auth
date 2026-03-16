@@ -34,8 +34,8 @@ function rebuildEnforcer(config: AclConfig) {
 // ── Auth helpers ──
 
 function requireAuth(c: { req: { header: (name: string) => string | undefined }; env: Env }): boolean {
-  const secret = c.req.header("X-ACL-Secret");
-  if (secret && secret === c.env.ACL_SECRET) return true;
+  const secret = c.req.header("X-Auth-Secret");
+  if (secret && secret === c.env.AUTH_SECRET) return true;
 
   const cfClientId = c.req.header("CF-Access-Client-Id");
   if (cfClientId && c.env.CF_ACCESS_CLIENT_ID && cfClientId === c.env.CF_ACCESS_CLIENT_ID) return true;
@@ -60,12 +60,12 @@ app.use("*", async (c, next) => {
   c.executionCtx.waitUntil(
     pushMetrics(c.env, [
       counter("mcp_requests_total", 1, {
-        service: "acl",
+        service: "auth",
         status: String(c.res.status),
         path: new URL(c.req.url).pathname,
       }),
       counter("mcp_request_duration_ms_total", Date.now() - start, {
-        service: "acl",
+        service: "auth",
         path: new URL(c.req.url).pathname,
       }),
     ]),
@@ -86,7 +86,7 @@ app.post("/check", async (c) => {
     return c.json({ error: "email, service, and tool are required" }, 400);
   }
 
-  const e = await getEnforcer(c.env.ACL_CREDENTIALS);
+  const e = await getEnforcer(c.env.AUTH_CREDENTIALS);
   const result = e.enforce(body.email, body.service, body.tool);
   return c.json(result);
 });
@@ -95,7 +95,7 @@ app.post("/check", async (c) => {
 
 app.get("/policy", async (c) => {
   if (!requireAuth(c)) return c.json({ error: "unauthorized" }, 401);
-  const e = await getEnforcer(c.env.ACL_CREDENTIALS);
+  const e = await getEnforcer(c.env.AUTH_CREDENTIALS);
   return c.json({ policies: buildPolicies(currentConfig!) });
 });
 
@@ -108,7 +108,7 @@ app.post("/credentials/:email/:service", async (c) => {
   const credentials = await c.req.json<Record<string, string>>();
 
   const key = `cred:${email}:${service}`;
-  await c.env.ACL_CREDENTIALS.put(key, JSON.stringify(credentials));
+  await c.env.AUTH_CREDENTIALS.put(key, JSON.stringify(credentials));
 
   return c.json({ ok: true });
 });
@@ -118,7 +118,7 @@ app.get("/credentials/:email/:service", async (c) => {
 
   const { email, service } = c.req.param();
   const key = `cred:${email}:${service}`;
-  const value = await c.env.ACL_CREDENTIALS.get(key, "json");
+  const value = await c.env.AUTH_CREDENTIALS.get(key, "json");
 
   if (!value) return c.json({ credentials: null });
   return c.json({ credentials: value });
@@ -129,7 +129,7 @@ app.delete("/credentials/:email/:service", async (c) => {
 
   const { email, service } = c.req.param();
   const key = `cred:${email}:${service}`;
-  await c.env.ACL_CREDENTIALS.delete(key);
+  await c.env.AUTH_CREDENTIALS.delete(key);
 
   return c.json({ ok: true });
 });
@@ -171,7 +171,7 @@ app.get("/acl/whoami", async (c) => {
   const email = getAdminEmail(c);
   if (!email) return c.json({ error: "X-Admin-Email header required" }, 400);
 
-  const config = await getConfig(c.env.ACL_CREDENTIALS);
+  const config = await getConfig(c.env.AUTH_CREDENTIALS);
   const user = config.users?.[email];
 
   return c.json({
@@ -187,7 +187,7 @@ app.get("/acl/whoami", async (c) => {
 // GET /acl/policy
 app.get("/acl/policy", async (c) => {
   if (!requireAuth(c)) return c.json({ error: "unauthorized" }, 401);
-  const config = await getConfig(c.env.ACL_CREDENTIALS);
+  const config = await getConfig(c.env.AUTH_CREDENTIALS);
   if (!isAdminUser(config, getAdminEmail(c))) return c.json({ error: "admin required" }, 403);
 
   return c.json(config);
@@ -196,13 +196,13 @@ app.get("/acl/policy", async (c) => {
 // PUT /acl/policy — replace full policy
 app.put("/acl/policy", async (c) => {
   if (!requireAuth(c)) return c.json({ error: "unauthorized" }, 401);
-  const config = await getConfig(c.env.ACL_CREDENTIALS);
+  const config = await getConfig(c.env.AUTH_CREDENTIALS);
   if (!isAdminUser(config, getAdminEmail(c))) return c.json({ error: "admin required" }, 403);
 
   const newConfig = await c.req.json<AclConfig>();
   if (!newConfig.default) return c.json({ error: "default field is required" }, 400);
 
-  await saveConfigToKV(c.env.ACL_CREDENTIALS, newConfig);
+  await saveConfigToKV(c.env.AUTH_CREDENTIALS, newConfig);
   rebuildEnforcer(newConfig);
   return c.json({ ok: true });
 });
@@ -210,7 +210,7 @@ app.put("/acl/policy", async (c) => {
 // GET /acl/users
 app.get("/acl/users", async (c) => {
   if (!requireAuth(c)) return c.json({ error: "unauthorized" }, 401);
-  const config = await getConfig(c.env.ACL_CREDENTIALS);
+  const config = await getConfig(c.env.AUTH_CREDENTIALS);
   if (!isAdminUser(config, getAdminEmail(c))) return c.json({ error: "admin required" }, 403);
 
   return c.json(config.users || {});
@@ -219,7 +219,7 @@ app.get("/acl/users", async (c) => {
 // PUT /acl/users/:email
 app.put("/acl/users/:email", async (c) => {
   if (!requireAuth(c)) return c.json({ error: "unauthorized" }, 401);
-  const config = await getConfig(c.env.ACL_CREDENTIALS);
+  const config = await getConfig(c.env.AUTH_CREDENTIALS);
   const adminEmail = getAdminEmail(c);
   if (!isAdminUser(config, adminEmail)) return c.json({ error: "admin required" }, 403);
 
@@ -227,7 +227,7 @@ app.put("/acl/users/:email", async (c) => {
   const userData = await c.req.json<AclUser>();
 
   const updated: AclConfig = { ...config, users: { ...config.users, [email]: userData } };
-  await saveConfigToKV(c.env.ACL_CREDENTIALS, updated);
+  await saveConfigToKV(c.env.AUTH_CREDENTIALS, updated);
   rebuildEnforcer(updated);
   return c.json({ ok: true });
 });
@@ -235,7 +235,7 @@ app.put("/acl/users/:email", async (c) => {
 // DELETE /acl/users/:email
 app.delete("/acl/users/:email", async (c) => {
   if (!requireAuth(c)) return c.json({ error: "unauthorized" }, 401);
-  const config = await getConfig(c.env.ACL_CREDENTIALS);
+  const config = await getConfig(c.env.AUTH_CREDENTIALS);
   const adminEmail = getAdminEmail(c);
   if (!isAdminUser(config, adminEmail)) return c.json({ error: "admin required" }, 403);
 
@@ -247,7 +247,7 @@ app.delete("/acl/users/:email", async (c) => {
   const users = { ...config.users };
   delete users[email];
   const updated: AclConfig = { ...config, users };
-  await saveConfigToKV(c.env.ACL_CREDENTIALS, updated);
+  await saveConfigToKV(c.env.AUTH_CREDENTIALS, updated);
   rebuildEnforcer(updated);
   return c.json({ ok: true });
 });
@@ -255,7 +255,7 @@ app.delete("/acl/users/:email", async (c) => {
 // GET /acl/groups
 app.get("/acl/groups", async (c) => {
   if (!requireAuth(c)) return c.json({ error: "unauthorized" }, 401);
-  const config = await getConfig(c.env.ACL_CREDENTIALS);
+  const config = await getConfig(c.env.AUTH_CREDENTIALS);
   if (!isAdminUser(config, getAdminEmail(c))) return c.json({ error: "admin required" }, 403);
 
   return c.json(config.groups || {});
@@ -264,7 +264,7 @@ app.get("/acl/groups", async (c) => {
 // PUT /acl/groups/:name
 app.put("/acl/groups/:name", async (c) => {
   if (!requireAuth(c)) return c.json({ error: "unauthorized" }, 401);
-  const config = await getConfig(c.env.ACL_CREDENTIALS);
+  const config = await getConfig(c.env.AUTH_CREDENTIALS);
   if (!isAdminUser(config, getAdminEmail(c))) return c.json({ error: "admin required" }, 403);
 
   const name = c.req.param("name");
@@ -275,7 +275,7 @@ app.put("/acl/groups/:name", async (c) => {
   }
 
   const updated: AclConfig = { ...config, groups: { ...config.groups, [name]: groupData } };
-  await saveConfigToKV(c.env.ACL_CREDENTIALS, updated);
+  await saveConfigToKV(c.env.AUTH_CREDENTIALS, updated);
   rebuildEnforcer(updated);
   return c.json({ ok: true });
 });
@@ -283,14 +283,14 @@ app.put("/acl/groups/:name", async (c) => {
 // DELETE /acl/groups/:name
 app.delete("/acl/groups/:name", async (c) => {
   if (!requireAuth(c)) return c.json({ error: "unauthorized" }, 401);
-  const config = await getConfig(c.env.ACL_CREDENTIALS);
+  const config = await getConfig(c.env.AUTH_CREDENTIALS);
   if (!isAdminUser(config, getAdminEmail(c))) return c.json({ error: "admin required" }, 403);
 
   const name = c.req.param("name");
   const groups = { ...config.groups };
   delete groups[name];
   const updated: AclConfig = { ...config, groups };
-  await saveConfigToKV(c.env.ACL_CREDENTIALS, updated);
+  await saveConfigToKV(c.env.AUTH_CREDENTIALS, updated);
   rebuildEnforcer(updated);
   return c.json({ ok: true });
 });
@@ -298,7 +298,7 @@ app.delete("/acl/groups/:name", async (c) => {
 // GET /acl/domains
 app.get("/acl/domains", async (c) => {
   if (!requireAuth(c)) return c.json({ error: "unauthorized" }, 401);
-  const config = await getConfig(c.env.ACL_CREDENTIALS);
+  const config = await getConfig(c.env.AUTH_CREDENTIALS);
   if (!isAdminUser(config, getAdminEmail(c))) return c.json({ error: "admin required" }, 403);
 
   return c.json(config.domains || {});
@@ -307,14 +307,14 @@ app.get("/acl/domains", async (c) => {
 // PUT /acl/domains/:domain
 app.put("/acl/domains/:domain", async (c) => {
   if (!requireAuth(c)) return c.json({ error: "unauthorized" }, 401);
-  const config = await getConfig(c.env.ACL_CREDENTIALS);
+  const config = await getConfig(c.env.AUTH_CREDENTIALS);
   if (!isAdminUser(config, getAdminEmail(c))) return c.json({ error: "admin required" }, 403);
 
   const domain = c.req.param("domain").toLowerCase();
   const domainData = await c.req.json<AclDomain>();
 
   const updated: AclConfig = { ...config, domains: { ...config.domains, [domain]: domainData } };
-  await saveConfigToKV(c.env.ACL_CREDENTIALS, updated);
+  await saveConfigToKV(c.env.AUTH_CREDENTIALS, updated);
   rebuildEnforcer(updated);
   return c.json({ ok: true });
 });
@@ -322,14 +322,14 @@ app.put("/acl/domains/:domain", async (c) => {
 // DELETE /acl/domains/:domain
 app.delete("/acl/domains/:domain", async (c) => {
   if (!requireAuth(c)) return c.json({ error: "unauthorized" }, 401);
-  const config = await getConfig(c.env.ACL_CREDENTIALS);
+  const config = await getConfig(c.env.AUTH_CREDENTIALS);
   if (!isAdminUser(config, getAdminEmail(c))) return c.json({ error: "admin required" }, 403);
 
   const domain = c.req.param("domain").toLowerCase();
   const domains = { ...config.domains };
   delete domains[domain];
   const updated: AclConfig = { ...config, domains };
-  await saveConfigToKV(c.env.ACL_CREDENTIALS, updated);
+  await saveConfigToKV(c.env.AUTH_CREDENTIALS, updated);
   rebuildEnforcer(updated);
   return c.json({ ok: true });
 });
@@ -337,7 +337,7 @@ app.delete("/acl/domains/:domain", async (c) => {
 // POST /acl/test — dry-run access check (admin only)
 app.post("/acl/test", async (c) => {
   if (!requireAuth(c)) return c.json({ error: "unauthorized" }, 401);
-  const config = await getConfig(c.env.ACL_CREDENTIALS);
+  const config = await getConfig(c.env.AUTH_CREDENTIALS);
   if (!isAdminUser(config, getAdminEmail(c))) return c.json({ error: "admin required" }, 403);
 
   const body = await c.req.json<CheckRequest>();
@@ -345,7 +345,7 @@ app.post("/acl/test", async (c) => {
     return c.json({ error: "email, service, and tool are required" }, 400);
   }
 
-  const e = await getEnforcer(c.env.ACL_CREDENTIALS);
+  const e = await getEnforcer(c.env.AUTH_CREDENTIALS);
   const result = e.enforce(body.email, body.service, body.tool);
   return c.json(result);
 });

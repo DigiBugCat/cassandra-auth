@@ -1,7 +1,7 @@
 interface Env {
-  ACL_CREDENTIALS: KVNamespace;
+  AUTH_CREDENTIALS: KVNamespace;
   MCP_KEYS: KVNamespace;
-  ACL_SECRET: string;
+  AUTH_SECRET: string;
   CF_ACCESS_CLIENT_ID?: string;
   VM_PUSH_URL: string;
   VM_PUSH_CLIENT_ID: string;

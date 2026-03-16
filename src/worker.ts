@@ -4,7 +4,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { pushMetrics, counter } from "cassandra-observability";
 import { createTokenResolver } from "./auth.js";
 import { createWorkOSHandler } from "./workos-handler.js";
-import { checkACL, fetchUserCredentials } from "./acl.js";
+import { checkAuth, fetchUserCredentials } from "./acl.js";
 import type {
   McpAuthEnv,
   McpAgentProps,
@@ -50,24 +50,24 @@ export function createMcpWorker<
     async init() {
       const props = this.props!;
 
-      // If ACL service is configured, fetch per-user credentials and merge
-      if (this.env.ACL_URL && this.env.ACL_SECRET) {
-        const aclCreds = await fetchUserCredentials<TCredentials>(
-          { ACL_URL: this.env.ACL_URL, ACL_SECRET: this.env.ACL_SECRET },
+      // If Auth service is configured, fetch per-user credentials and merge
+      if (this.env.AUTH_URL && this.env.AUTH_SECRET) {
+        const authCreds = await fetchUserCredentials<TCredentials>(
+          { AUTH_URL: this.env.AUTH_URL, AUTH_SECRET: this.env.AUTH_SECRET },
           props.email,
           config.serviceId,
         );
-        if (aclCreds) {
-          // ACL credentials take precedence over MCP key credentials
-          props.credentials = { ...props.credentials, ...aclCreds } as TCredentials;
+        if (authCreds) {
+          // Auth credentials take precedence over MCP key credentials
+          props.credentials = { ...props.credentials, ...authCreds } as TCredentials;
         }
       }
 
       await config.registerTools(this.server, this.env, props);
 
-      // If ACL service is configured, wrap all registered tools with ACL checks
-      if (this.env.ACL_URL && this.env.ACL_SECRET) {
-        const aclEnv = { ACL_URL: this.env.ACL_URL, ACL_SECRET: this.env.ACL_SECRET };
+      // If Auth service is configured, wrap all registered tools with auth checks
+      if (this.env.AUTH_URL && this.env.AUTH_SECRET) {
+        const authEnv = { AUTH_URL: this.env.AUTH_URL, AUTH_SECRET: this.env.AUTH_SECRET };
         const email = props.email;
         const serviceId = config.serviceId;
 
@@ -77,7 +77,7 @@ export function createMcpWorker<
           (this.server as any)._requestHandlers.set("tools/call", async (request: any, extra: any) => {
             const toolName = request.params?.name;
             if (toolName) {
-              const allowed = await checkACL(aclEnv, email, serviceId, toolName);
+              const allowed = await checkAuth(authEnv, email, serviceId, toolName);
               if (!allowed) {
                 return {
                   content: [{ type: "text", text: `Access denied: you do not have permission to use '${toolName}' on ${serviceId}.` }],

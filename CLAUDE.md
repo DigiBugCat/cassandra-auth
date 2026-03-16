@@ -35,7 +35,7 @@ cassandra-auth/
 │   ├── package.json
 │   └── tsconfig.json
 ├── infra/
-│   └── modules/acl-edge/          # Terraform: KV, DNS
+│   └── modules/auth-worker/          # Terraform: KV, DNS
 ├── tests/                         # TypeScript tests
 ├── package.json                   # TS package config
 ├── tsconfig.json
@@ -87,18 +87,18 @@ For Python/FastMCP MCP servers that run as k8s sidecar containers (not CF Worker
 
 ### McpKeyAuthProvider
 
-Validates `Bearer mcp_...` tokens by calling the ACL service's `POST /keys/validate` endpoint. Returns user email, service scope, and optional per-key credentials. Requires `ACL_URL` and `ACL_SECRET` env vars.
+Validates `Bearer mcp_...` tokens by calling the ACL service's `POST /keys/validate` endpoint. Returns user email, service scope, and optional per-key credentials. Requires `AUTH_URL` and `AUTH_SECRET` env vars.
 
 ### Enforcer
 
-Lightweight local ACL enforcement from a YAML policy file (same format as `env/acl.yaml`). Loaded from `ACL_YAML_PATH` env var. Supports user/group/domain policies with deny-wins semantics. Wraps MCP tools to check `(email, service, tool) → allow/deny` before execution.
+Lightweight local ACL enforcement from a YAML policy file (same format as `env/acl.yaml`). Loaded from `AUTH_YAML_PATH` env var. Supports user/group/domain policies with deny-wins semantics. Wraps MCP tools to check `(email, service, tool) → allow/deny` before execution.
 
 ### Usage
 
 ```python
 from cassandra_mcp_auth import McpKeyAuthProvider, Enforcer
 
-auth = McpKeyAuthProvider(acl_url="https://acl.example.com", acl_secret="...")
+auth = McpKeyAuthProvider(acl_url="https://acl.example.com", auth_secret="...")
 result = await auth.validate("mcp_abc123")
 
 enforcer = Enforcer.from_yaml("/app/acl.yaml")
@@ -109,7 +109,7 @@ enforcer.check("user@example.com", "yt-mcp", "transcribe")
 
 ### Endpoints
 
-All endpoints (except `/health`) require `X-ACL-Secret` header or CF Access service token.
+All endpoints (except `/health`) require `X-Auth-Secret` header or CF Access service token.
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -123,7 +123,7 @@ All endpoints (except `/health`) require `X-ACL-Secret` header or CF Access serv
 
 ### Bindings
 
-- `ACL_CREDENTIALS` — KV namespace for per-user credentials (keyed by `cred:{email}:{service}`)
+- `AUTH_CREDENTIALS` — KV namespace for per-user credentials (keyed by `cred:{email}:{service}`)
 - `MCP_KEYS` — Shared KV namespace for MCP API key validation (shared with portal + all MCP workers)
 
 ### Deploy
@@ -133,7 +133,7 @@ Worker auto-deploys on push to main via Woodpecker CI (`.woodpecker.yaml`).
 ```bash
 # Wrangler secrets
 cd worker
-wrangler secret put ACL_SECRET
+wrangler secret put AUTH_SECRET
 wrangler secret put VM_PUSH_URL
 wrangler secret put VM_PUSH_CLIENT_ID
 wrangler secret put VM_PUSH_CLIENT_SECRET

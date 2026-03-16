@@ -18,5 +18,5 @@ resource "cloudflare_record" "worker" {
   content = "${var.worker_script_name}.${var.account_id}.workers.dev"
   type    = "CNAME"
   proxied = true
-  comment = "Cassandra ACL service worker hostname"
+  comment = "Cassandra auth service worker hostname"
 }

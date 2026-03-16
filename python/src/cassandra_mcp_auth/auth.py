@@ -1,4 +1,4 @@
-"""Custom FastMCP AuthProvider that validates MCP API keys via the ACL service."""
+"""Custom FastMCP AuthProvider that validates MCP API keys via the auth service."""
 
 from __future__ import annotations
 
@@ -21,15 +21,15 @@ class McpKeyInfo:
 
 
 class McpKeyAuthProvider(AuthProvider):
-    """Validates `mcp_` bearer tokens by calling the ACL service's /keys/validate endpoint.
+    """Validates `mcp_` bearer tokens by calling the auth service's /keys/validate endpoint.
 
     Returns an AccessToken with the user's email in claims so tools can access it
     via CurrentAccessToken().
     """
 
     def __init__(self, *, acl_url: str, acl_secret: str, service_id: str = "yt-mcp") -> None:
-        self._acl_url = acl_url.rstrip("/")
-        self._acl_secret = acl_secret
+        self._auth_url = acl_url.rstrip("/")
+        self._auth_secret = acl_secret
         self._service_id = service_id
         self._client = httpx.Client(timeout=10)
 
@@ -41,10 +41,10 @@ class McpKeyAuthProvider(AuthProvider):
 
         try:
             resp = self._client.post(
-                f"{self._acl_url}/keys/validate",
+                f"{self._auth_url}/keys/validate",
                 json={"key": token},
                 headers={
-                    "X-ACL-Secret": self._acl_secret,
+                    "X-Auth-Secret": self._auth_secret,
                     "Content-Type": "application/json",
                 },
             )
@@ -82,7 +82,7 @@ class McpKeyAuthProvider(AuthProvider):
             )
 
         except httpx.HTTPError:
-            logger.exception("Failed to validate MCP key against ACL service")
+            logger.exception("Failed to validate MCP key against auth service")
             return None
 
     def close(self) -> None:

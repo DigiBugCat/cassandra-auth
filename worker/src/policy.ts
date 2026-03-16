@@ -1,7 +1,7 @@
 /**
- * ACL policy management — supports KV-stored JSON (primary) and baked-in YAML (fallback).
+ * Auth policy management — supports KV-stored JSON (primary) and baked-in YAML (fallback).
  *
- * KV key: `acl:policy` in ACL_CREDENTIALS namespace.
+ * KV key: `acl:policy` in AUTH_CREDENTIALS namespace.
  * If KV has no policy, falls back to the YAML baked into the worker bundle at build time.
  */
 import aclYaml from "../../env/acl.yaml";

@@ -13,10 +13,10 @@ export interface McpAuthEnv {
   VM_PUSH_URL: string;
   VM_PUSH_CLIENT_ID: string;
   VM_PUSH_CLIENT_SECRET: string;
-  /** ACL service URL — optional, enables per-tool authorization when set. */
-  ACL_URL?: string;
-  /** Shared secret for ACL service-to-service auth. */
-  ACL_SECRET?: string;
+  /** Auth service URL — optional, enables per-tool authorization when set. */
+  AUTH_URL?: string;
+  /** Shared secret for Auth service-to-service auth. */
+  AUTH_SECRET?: string;
 }
 
 /** Resolved identity + per-key credentials from token resolution. */

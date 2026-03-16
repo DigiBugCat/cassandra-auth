@@ -10,7 +10,7 @@ steps:
       - npm install
       - npm run type-check
 
-  # ── CI: type-check ACL worker (all branches, push + PR) ──
+  # ── CI: type-check auth worker (all branches, push + PR) ──
 
   - name: type-check-worker
     image: node:22-slim
@@ -19,9 +19,9 @@ steps:
       - npm install
       - npm run type-check
 
-  # ── Deploy: ACL CF Worker (push to main only) ──
+  # ── Deploy: Auth CF Worker (push to main only) ──
 
-  - name: deploy-acl
+  - name: deploy-auth
     image: node:22-slim
     when:
       - event: push
@@ -31,14 +31,14 @@ steps:
         from_secret: cloudflare_api_token
       CLOUDFLARE_ACCOUNT_ID:
         from_secret: cloudflare_account_id
-      ACL_CREDENTIALS_KV_ID:
-        from_secret: acl_credentials_kv_id
+      AUTH_CREDENTIALS_KV_ID:
+        from_secret: auth_credentials_kv_id
       WORKER_ROUTE_PATTERN:
-        from_secret: acl_worker_route_pattern
+        from_secret: auth_worker_route_pattern
       WORKER_ROUTE_ZONE:
-        from_secret: acl_worker_route_zone
-      ACL_YAML:
-        from_secret: acl_yaml
+        from_secret: auth_worker_route_zone
+      AUTH_YAML:
+        from_secret: auth_yaml
       MCP_KEYS_KV_ID:
         from_secret: mcp_keys_kv_id
     commands:
@@ -46,19 +46,19 @@ steps:
       - npm install
       # Write acl.yaml from secret (contains policy, gitignored in source)
       - mkdir -p ../env || true
-      - echo "$ACL_YAML" > ../env/acl.yaml
+      - echo "$AUTH_YAML" > ../env/acl.yaml
       - |
         node -e "
         const fs = require('fs');
         const config = {
           '\$schema': 'node_modules/wrangler/config-schema.json',
-          name: 'cassandra-acl',
+          name: 'cassandra-auth',
           main: 'src/index.ts',
           compatibility_date: '2025-03-10',
           compatibility_flags: ['nodejs_compat'],
           rules: [{ type: 'Text', globs: ['**/*.yaml'] }],
           kv_namespaces: [
-            { binding: 'ACL_CREDENTIALS', id: process.env.ACL_CREDENTIALS_KV_ID },
+            { binding: 'AUTH_CREDENTIALS', id: process.env.AUTH_CREDENTIALS_KV_ID },
             { binding: 'MCP_KEYS', id: process.env.MCP_KEYS_KV_ID }
           ],
           routes: [

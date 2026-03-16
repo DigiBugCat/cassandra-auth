@@ -8,7 +8,7 @@ output "worker_hostname" {
   value       = "${var.worker_subdomain}.${var.domain}"
 }
 
-output "acl_url" {
-  description = "ACL service base URL"
+output "auth_url" {
+  description = "Auth service base URL"
   value       = "https://${var.worker_subdomain}.${var.domain}"
 }

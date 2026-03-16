@@ -1,14 +1,14 @@
 /**
- * ACL client for checking tool-level authorization against the centralized ACL service.
- * Also fetches per-user credentials from the ACL service.
+ * Auth client for checking tool-level authorization against the centralized auth service.
+ * Also fetches per-user credentials from the auth service.
  */
 
-export interface AclEnv {
-  ACL_URL: string;
-  ACL_SECRET: string;
+export interface AuthEnv {
+  AUTH_URL: string;
+  AUTH_SECRET: string;
 }
 
-export interface AclCheckResult {
+export interface AuthCheckResult {
   allowed: boolean;
   reason: string;
 }
@@ -16,43 +16,43 @@ export interface AclCheckResult {
 /**
  * Check if a user is allowed to use a specific tool on a service.
  */
-export async function checkACL(
-  env: AclEnv,
+export async function checkAuth(
+  env: AuthEnv,
   email: string,
   service: string,
   tool: string,
 ): Promise<boolean> {
   try {
-    const res = await fetch(`${env.ACL_URL}/check`, {
+    const res = await fetch(`${env.AUTH_URL}/check`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-ACL-Secret": env.ACL_SECRET,
+        "X-Auth-Secret": env.AUTH_SECRET,
       },
       body: JSON.stringify({ email, service, tool }),
     });
 
     if (!res.ok) return false;
 
-    const result = (await res.json()) as AclCheckResult;
+    const result = (await res.json()) as AuthCheckResult;
     return result.allowed;
   } catch {
-    // ACL service unavailable — fail open for now (log + metric would be good)
+    // Auth service unavailable — fail open for now
     return true;
   }
 }
 
 /**
- * Fetch per-user credentials from the ACL service.
+ * Fetch per-user credentials from the auth service.
  */
 export async function fetchUserCredentials<T extends Record<string, string> = Record<string, string>>(
-  env: AclEnv,
+  env: AuthEnv,
   email: string,
   service: string,
 ): Promise<T | null> {
   try {
-    const res = await fetch(`${env.ACL_URL}/credentials/${encodeURIComponent(email)}/${encodeURIComponent(service)}`, {
-      headers: { "X-ACL-Secret": env.ACL_SECRET },
+    const res = await fetch(`${env.AUTH_URL}/credentials/${encodeURIComponent(email)}/${encodeURIComponent(service)}`, {
+      headers: { "X-Auth-Secret": env.AUTH_SECRET },
     });
 
     if (!res.ok) return null;
