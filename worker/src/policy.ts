@@ -1,41 +1,17 @@
 /**
- * Parse env/acl.yaml (imported as text at build time) into Casbin policy lines.
- * The YAML is baked into the worker bundle — no D1 or external push needed.
- * To update policy: edit env/acl.yaml and redeploy.
+ * ACL policy management — supports KV-stored JSON (primary) and baked-in YAML (fallback).
+ *
+ * KV key: `acl:policy` in ACL_CREDENTIALS namespace.
+ * If KV has no policy, falls back to the YAML baked into the worker bundle at build time.
  */
 import aclYaml from "../../env/acl.yaml";
 import { parse } from "yaml";
-import type { PolicyLine } from "./types";
+import type { AclConfig, PolicyLine } from "./types";
 
-interface AclGroup {
-  services: Record<string, {
-    access?: "allow" | "deny";
-    tools?: {
-      allow?: string[];
-      deny?: string[];
-    };
-  }>;
-}
+const KV_KEY = "acl:policy";
 
-interface AclUser {
-  role?: "admin" | "user";
-  services?: "*" | string[];
-  groups?: string[];
-}
-
-interface AclDomain {
-  role?: "admin" | "user";
-  groups?: string[];
-}
-
-interface AclConfig {
-  default: "allow" | "deny";
-  groups?: Record<string, AclGroup>;
-  users?: Record<string, AclUser>;
-  domains?: Record<string, AclDomain>;
-}
-
-function buildPolicies(config: AclConfig): PolicyLine[] {
+/** Parse an AclConfig into Casbin-compatible policy lines. */
+export function buildPolicies(config: AclConfig): PolicyLine[] {
   const policies: PolicyLine[] = [];
 
   const add = (ptype: string, v0: string, v1: string, v2: string, v3: string) => {
@@ -91,5 +67,16 @@ function buildPolicies(config: AclConfig): PolicyLine[] {
   return policies;
 }
 
-const config = parse(aclYaml) as AclConfig;
-export const POLICIES = buildPolicies(config);
+/** Default config parsed from baked-in YAML (fallback when KV has no policy). */
+export const DEFAULT_CONFIG: AclConfig = parse(aclYaml) as AclConfig;
+
+/** Load ACL config from KV. Returns null if no policy stored. */
+export async function loadConfigFromKV(kv: KVNamespace): Promise<AclConfig | null> {
+  const raw = await kv.get(KV_KEY, "json");
+  return raw as AclConfig | null;
+}
+
+/** Save ACL config to KV. */
+export async function saveConfigToKV(kv: KVNamespace, config: AclConfig): Promise<void> {
+  await kv.put(KV_KEY, JSON.stringify(config));
+}
