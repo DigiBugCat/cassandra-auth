@@ -99,7 +99,42 @@ app.get("/policy", async (c) => {
   return c.json({ policies: buildPolicies(currentConfig!) });
 });
 
-// ── Credentials endpoints (unchanged) ──
+// ── Service-level credentials (global, admin-managed) ──
+
+app.post("/service-credentials/:service", async (c) => {
+  if (!requireAuth(c)) return c.json({ error: "unauthorized" }, 401);
+
+  const service = c.req.param("service");
+  const credentials = await c.req.json<Record<string, string>>();
+
+  const key = `svc-cred:${service}`;
+  await c.env.AUTH_CREDENTIALS.put(key, JSON.stringify(credentials));
+
+  return c.json({ ok: true });
+});
+
+app.get("/service-credentials/:service", async (c) => {
+  if (!requireAuth(c)) return c.json({ error: "unauthorized" }, 401);
+
+  const service = c.req.param("service");
+  const key = `svc-cred:${service}`;
+  const value = await c.env.AUTH_CREDENTIALS.get(key, "json");
+
+  if (!value) return c.json({ credentials: null });
+  return c.json({ credentials: value });
+});
+
+app.delete("/service-credentials/:service", async (c) => {
+  if (!requireAuth(c)) return c.json({ error: "unauthorized" }, 401);
+
+  const service = c.req.param("service");
+  const key = `svc-cred:${service}`;
+  await c.env.AUTH_CREDENTIALS.delete(key);
+
+  return c.json({ ok: true });
+});
+
+// ── Per-user credentials ──
 
 app.post("/credentials/:email/:service", async (c) => {
   if (!requireAuth(c)) return c.json({ error: "unauthorized" }, 401);
@@ -152,11 +187,15 @@ app.post("/keys/validate", async (c) => {
     return c.json({ valid: false }, 500);
   }
 
+  // Fetch service-level credentials to merge into response
+  const svcCredRaw = await c.env.AUTH_CREDENTIALS.get(`svc-cred:${meta.service}`, "json");
+
   return c.json({
     valid: true,
     email: meta.created_by || meta.email,
     service: meta.service,
     credentials: meta.credentials || null,
+    serviceCredentials: svcCredRaw || null,
   });
 });
 
