@@ -2,151 +2,96 @@
 
 ## What This Is
 
-Shared auth package + centralized ACL service for the Cassandra platform. Two parts:
+Centralized auth service + Python auth library for the Cassandra platform. Two parts:
 
-1. **Shared auth library** — TypeScript (CF Workers) and Python (FastMCP servers) packages for MCP API key resolution, WorkOS OAuth, ACL enforcement, and metrics middleware.
-2. **ACL Worker** — CF Worker providing centralized access control, MCP key validation, and per-user credential storage.
+1. **Auth service** (`service/`) — FastAPI app with Casbin RBAC, MCP key validation, per-user + service-level credential storage. Runs in k8s, uses SQLite.
+2. **Python auth library** (`python/`) — `McpKeyAuthProvider` (validates mcp_ API keys) + `Enforcer` (per-tool ACL) for FastMCP sidecars in k8s.
 
 ## Repo Structure
 
 ```
 cassandra-auth/
-├── src/                           # TypeScript package (CF Workers)
-│   ├── index.ts                   # Public API: createMcpWorker + types + advanced escape hatch
-│   ├── advanced.ts                # Lower-level exports for custom integrations
-│   ├── types.ts                   # McpAuthEnv, ResolvedAuth, McpWorkerConfig
-│   ├── auth.ts                    # resolveExternalToken (mcp_ key + WorkOS JWT)
-│   ├── worker.ts                  # createMcpWorker() factory
-│   ├── workos-handler.ts          # WorkOS OAuth handler (Hono)
-│   ├── workers-oauth-utils.ts     # CSRF, state, session utils
-│   └── utils.ts                   # WorkOS token exchange
-├── python/                        # Python package (FastMCP servers)
+├── service/                       # Auth service (FastAPI + SQLite)
+│   ├── src/cassandra_auth_service/
+│   │   ├── app.py                 # FastAPI app — all endpoints
+│   │   ├── db.py                  # Async SQLite (WAL mode)
+│   │   ├── policy.py              # Casbin enforcer + config load/save
+│   │   └── main.py                # CLI entrypoint (uvicorn)
+│   ├── tests/
+│   │   └── test_app.py            # Full endpoint tests
+│   ├── schema.sql                 # DB schema
+│   ├── model.conf                 # Casbin RBAC model
+│   └── pyproject.toml
+├── python/                        # Python package (FastMCP sidecars)
 │   └── src/cassandra_mcp_auth/
 │       ├── __init__.py            # Public API exports
-│       ├── auth.py                # McpKeyAuthProvider — validates mcp_ keys via ACL /keys/validate
-│       └── acl.py                 # Enforcer — local YAML-based ACL policy enforcement
-├── worker/                        # ACL CF Worker
-│   ├── src/
-│   │   ├── index.ts               # Hono app with all endpoints
-│   │   ├── enforcer.ts            # Casbin-compatible enforcer (lightweight, no Node.js deps)
-│   │   ├── policy.ts              # Parses env/acl.yaml at build time → policy lines
-│   │   └── types.ts               # Request/response types
-│   ├── wrangler.jsonc.example
-│   ├── package.json
-│   └── tsconfig.json
-├── infra/
-│   └── modules/auth-worker/          # Terraform: KV, DNS
-├── tests/                         # TypeScript tests
-├── package.json                   # TS package config
-├── tsconfig.json
-├── .woodpecker.yaml
+│       ├── auth.py                # McpKeyAuthProvider — validates mcp_ keys via /keys/validate
+│       └── acl.py                 # Enforcer — local YAML-based ACL enforcement
+├── env/                           # acl.yaml (gitignored)
+├── .woodpecker.yaml               # CI: test → build → push → restart
 └── CLAUDE.md
 ```
 
-## TypeScript Package (CF Workers)
+## Auth Service
 
-Consumed via `github:DigiBugCat/cassandra-auth` in Worker `package.json` files.
+### Endpoints
 
-### Usage
+All endpoints (except `/health`) require `X-Auth-Secret` header.
 
-```ts
-import { createMcpWorker } from "cassandra-mcp-auth";
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/health` | Health check (no auth) |
+| POST | `/check` | `{email, service, tool}` → `{allowed, reason}` |
+| POST/GET/DELETE | `/credentials/{email}/{service}` | Per-user credential CRUD |
+| POST/GET/DELETE | `/service-credentials/{service}` | Service-level credential CRUD |
+| POST | `/keys/validate` | `{key}` → `{valid, email, service, credentials, serviceCredentials}` |
+| PUT/DELETE | `/keys/{key_id}` | MCP key CRUD (written by portal) |
+| PATCH | `/keys/{key_id}/credentials` | Update credentials on existing key |
+| GET | `/acl/whoami` | Caller's role + groups |
+| POST | `/acl/register` | Auto-register user on first sign-in |
+| GET/PUT | `/acl/policy` | Full policy CRUD (admin) |
+| GET/PUT/DELETE | `/acl/users/{email}` | User CRUD (admin) |
+| GET/PUT/DELETE | `/acl/groups/{name}` | Group CRUD (admin) |
+| GET/PUT/DELETE | `/acl/domains/{domain}` | Domain CRUD (admin) |
+| POST | `/acl/test` | Dry-run access check (admin) |
 
-const { default: worker, McpAgentClass } = createMcpWorker<Env, MyCredentials>({
-  serviceId: "my-service",
-  name: "My MCP Service",
-  registerTools(server, env, auth) {
-    server.registerTool("my_tool", { ... }, async (args) => { ... });
-  },
-});
+### Env Vars
 
-export { McpAgentClass as MyServiceMCP };
-export default worker;
+- `AUTH_SECRET` — shared secret for service-to-service auth
+- `DB_PATH` — SQLite database path (default: `/data/auth.db`)
+- `ACL_YAML_PATH` — initial ACL policy YAML (loaded into DB on first run)
+- `HOST` / `PORT` — bind address (default: `0.0.0.0:8080`)
+
+### Run
+
+```bash
+cd service
+uv run cassandra-auth          # or: uv run uvicorn cassandra_auth_service.app:create_app --factory
+uv run pytest -v               # tests
 ```
 
-### Consumer Requirements
+### Policy
 
-Each Worker using this package needs:
+ACL config is stored in SQLite (`acl_config` table) and managed via `/acl/*` CRUD endpoints. On first startup, loads from `ACL_YAML_PATH` if DB is empty. The `default` field controls behavior when no policy matches (`allow` or `deny`).
 
-#### Bindings (wrangler.jsonc)
-- `MCP_OBJECT` — Durable Object (MUST be this name)
-- `OAUTH_KV` — Per-service KV for OAuth state
-- `MCP_KEYS` — Shared KV for API key auth
-
-#### Secrets (wrangler secret put)
-- `WORKOS_CLIENT_ID` — Shared WorkOS app
-- `WORKOS_CLIENT_SECRET` — Shared WorkOS app
-- `COOKIE_ENCRYPTION_KEY` — Session encryption
-- `VM_PUSH_URL` — VictoriaMetrics push endpoint
-- `VM_PUSH_CLIENT_ID` — CF Access service token for metrics
-- `VM_PUSH_CLIENT_SECRET` — CF Access service token for metrics
-
-## Python Package (FastMCP servers)
-
-For Python/FastMCP MCP servers that run as k8s sidecar containers (not CF Workers).
+## Python Package (FastMCP sidecars)
 
 ### McpKeyAuthProvider
 
-Validates `Bearer mcp_...` tokens by calling the ACL service's `POST /keys/validate` endpoint. Returns user email, service scope, and optional per-key credentials. Requires `AUTH_URL` and `AUTH_SECRET` env vars.
+Validates `Bearer mcp_...` tokens by calling the auth service's `POST /keys/validate`. Returns user email, service scope, and optional per-key + service-level credentials.
 
 ### Enforcer
 
-Lightweight local ACL enforcement from a YAML policy file (same format as `env/acl.yaml`). Loaded from `AUTH_YAML_PATH` env var. Supports user/group/domain policies with deny-wins semantics. Wraps MCP tools to check `(email, service, tool) → allow/deny` before execution.
+Lightweight local ACL enforcement from a YAML policy file. Supports user/group/domain policies with deny-wins semantics. Wraps MCP tools to check `(email, service, tool) → allow/deny` before execution.
 
 ### Usage
 
 ```python
 from cassandra_mcp_auth import McpKeyAuthProvider, Enforcer
 
-auth = McpKeyAuthProvider(acl_url="https://acl.example.com", auth_secret="...")
+auth = McpKeyAuthProvider(acl_url="https://auth.internal:8080", auth_secret="...")
 result = await auth.validate("mcp_abc123")
 
 enforcer = Enforcer.from_yaml("/app/acl.yaml")
 enforcer.check("user@example.com", "yt-mcp", "transcribe")
 ```
-
-## ACL Worker
-
-### Endpoints
-
-All endpoints (except `/health`) require `X-Auth-Secret` header or CF Access service token.
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/health` | Health check (no auth) |
-| POST | `/check` | `{email, service, tool}` → `{allowed, reason}` |
-| GET | `/policy` | Return current baked-in policy |
-| POST | `/credentials/:email/:service` | Store per-user credentials |
-| GET | `/credentials/:email/:service` | Retrieve per-user credentials |
-| DELETE | `/credentials/:email/:service` | Remove per-user credentials |
-| POST | `/keys/validate` | `{key}` → `{valid, email, service, credentials}` — validates MCP API key from shared `MCP_KEYS` KV |
-
-### Bindings
-
-- `AUTH_CREDENTIALS` — KV namespace for per-user credentials (keyed by `cred:{email}:{service}`)
-- `MCP_KEYS` — Shared KV namespace for MCP API key validation (shared with portal + all MCP workers)
-
-### Deploy
-
-Worker auto-deploys on push to main via Woodpecker CI (`.woodpecker.yaml`).
-
-```bash
-# Wrangler secrets
-cd worker
-wrangler secret put AUTH_SECRET
-wrangler secret put VM_PUSH_URL
-wrangler secret put VM_PUSH_CLIENT_ID
-wrangler secret put VM_PUSH_CLIENT_SECRET
-```
-
-### Policy
-
-Policy is baked into the worker bundle from `env/acl.yaml` (gitignored). To update policy:
-1. Edit `env/acl.yaml`
-2. Push to main — Woodpecker injects the YAML content from a secret and redeploys
-
-## Advanced API (TypeScript)
-
-`createMcpWorker()` is the blessed path for normal CF Worker services.
-
-If a service really does need lower-level control, import the `advanced` namespace from the package root and reach for `advanced.createTokenResolver`, `advanced.createWorkOSHandler`, or the OAuth helpers explicitly.

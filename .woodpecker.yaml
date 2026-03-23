@@ -2,70 +2,39 @@ when:
   - event: [push, pull_request]
 
 steps:
-  # ── CI: type-check shared auth package (all branches, push + PR) ──
-
-  - name: type-check-lib
-    image: node:22-slim
+  # ── CI: tests (all branches, push + PR) ──
+  - name: test
+    image: ghcr.io/astral-sh/uv:python3.13-alpine
     commands:
-      - npm install
-      - npm run type-check
-
-  # ── CI: type-check auth worker (all branches, push + PR) ──
-
-  - name: type-check-worker
-    image: node:22-slim
-    commands:
-      - cd worker
-      - npm install
-      - npm run type-check
-
-  # ── Deploy: Auth CF Worker (push to main only) ──
-
-  - name: deploy-auth
-    image: node:22-slim
+      - cd service
+      - uv sync
+      - uv run pytest -v
     when:
-      - event: push
-        branch: main
-    environment:
-      CLOUDFLARE_API_TOKEN:
-        from_secret: cloudflare_api_token
-      CLOUDFLARE_ACCOUNT_ID:
-        from_secret: cloudflare_account_id
-      AUTH_CREDENTIALS_KV_ID:
-        from_secret: auth_credentials_kv_id
-      WORKER_ROUTE_PATTERN:
-        from_secret: auth_worker_route_pattern
-      WORKER_ROUTE_ZONE:
-        from_secret: auth_worker_route_zone
-      AUTH_YAML:
-        from_secret: auth_yaml
-      MCP_KEYS_KV_ID:
-        from_secret: mcp_keys_kv_id
+      event: [push, pull_request]
+
+  # ── CD: build + push (main only) ──
+  - name: build-and-push
+    image: moby/buildkit:v0.21.1
     commands:
-      - cd worker
-      - npm install
-      # Write acl.yaml from secret (contains policy, gitignored in source)
-      - mkdir -p ../env || true
-      - echo "$AUTH_YAML" > ../env/acl.yaml
       - |
-        node -e "
-        const fs = require('fs');
-        const config = {
-          '\$schema': 'node_modules/wrangler/config-schema.json',
-          name: 'cassandra-auth',
-          main: 'src/index.ts',
-          compatibility_date: '2025-03-10',
-          compatibility_flags: ['nodejs_compat'],
-          rules: [{ type: 'Text', globs: ['**/*.yaml'] }],
-          kv_namespaces: [
-            { binding: 'AUTH_CREDENTIALS', id: process.env.AUTH_CREDENTIALS_KV_ID },
-            { binding: 'MCP_KEYS', id: process.env.MCP_KEYS_KV_ID }
-          ],
-          routes: [
-            { pattern: process.env.WORKER_ROUTE_PATTERN, zone_name: process.env.WORKER_ROUTE_ZONE }
-          ],
-          observability: { enabled: true }
-        };
-        fs.writeFileSync('wrangler.jsonc', JSON.stringify(config, null, 2));
-        "
-      - npx wrangler deploy
+        buildctl --addr tcp://buildkitd.buildkitd.svc.cluster.local:1234 \
+          build \
+          --frontend dockerfile.v0 \
+          --local context=service \
+          --local dockerfile=service \
+          --opt build-arg:AUTH_YAML_CONTENT="$AUTH_YAML_CONTENT" \
+          --output type=image,name=172.20.0.161:30500/cassandra-auth:latest,push=true,registry.insecure=true
+    environment:
+      AUTH_YAML_CONTENT:
+        from_secret: auth_yaml
+    when:
+      branch: main
+      event: push
+
+  - name: restart-deployment
+    image: bitnami/kubectl:latest
+    commands:
+      - kubectl rollout restart deployment auth -n production
+    when:
+      branch: main
+      event: push
