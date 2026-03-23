@@ -8,7 +8,7 @@ steps:
     commands:
       - cd service
       - uv sync --extra dev
-      - uv run pytest -v
+      - SCHEMA_PATH=$PWD/schema.sql MODEL_PATH=$PWD/model.conf uv run pytest -v
     when:
       event: [push, pull_request]
 
