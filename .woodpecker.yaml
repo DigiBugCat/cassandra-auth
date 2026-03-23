@@ -30,11 +30,3 @@ steps:
     when:
       branch: main
       event: push
-
-  - name: restart-deployment
-    image: bitnami/kubectl:latest
-    commands:
-      - kubectl rollout restart deployment auth -n production
-    when:
-      branch: main
-      event: push
