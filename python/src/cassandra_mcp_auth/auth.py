@@ -1,4 +1,4 @@
-"""Custom FastMCP AuthProvider that validates MCP API keys via the auth service."""
+"""Custom FastMCP auth: MCP API key validation + WorkOS OAuth proxy via MultiAuth."""
 
 from __future__ import annotations
 
@@ -6,7 +6,8 @@ import logging
 from dataclasses import dataclass
 
 import httpx
-from fastmcp.server.auth import AccessToken, AuthProvider
+from fastmcp.server.auth import AccessToken, AuthProvider, MultiAuth, TokenVerifier
+from fastmcp.server.auth.providers.workos import WorkOSProvider
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +21,7 @@ class McpKeyInfo:
     credentials: dict[str, str] | None
 
 
-class McpKeyAuthProvider(AuthProvider):
+class McpKeyAuthProvider(TokenVerifier):
     """Validates `mcp_` bearer tokens by calling the auth service's /keys/validate endpoint.
 
     Returns an AccessToken with the user's email in claims so tools can access it
@@ -95,3 +96,40 @@ class McpKeyAuthProvider(AuthProvider):
 
     def close(self) -> None:
         self._client.close()
+
+
+def build_auth(
+    *,
+    acl_url: str,
+    acl_secret: str,
+    service_id: str,
+    base_url: str,
+    workos_client_id: str,
+    workos_client_secret: str,
+    workos_authkit_domain: str,
+) -> tuple[AuthProvider, McpKeyAuthProvider]:
+    """Build a MultiAuth provider combining WorkOS OAuth (for claude.ai) and MCP key auth.
+
+    Returns (auth_provider, mcp_key_provider) — caller needs mcp_key_provider
+    to call .close() on shutdown.
+    """
+    mcp_key_provider = McpKeyAuthProvider(
+        acl_url=acl_url,
+        acl_secret=acl_secret,
+        service_id=service_id,
+    )
+
+    workos_provider = WorkOSProvider(
+        client_id=workos_client_id,
+        client_secret=workos_client_secret,
+        authkit_domain=workos_authkit_domain,
+        base_url=base_url,
+        require_authorization_consent=False,
+    )
+
+    auth = MultiAuth(
+        server=workos_provider,
+        verifiers=[mcp_key_provider],
+    )
+
+    return auth, mcp_key_provider
