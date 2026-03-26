@@ -126,7 +126,7 @@ def build_auth(
         base_url=base_url,
         required_scopes=["openid", "profile", "email"],
         require_authorization_consent=False,
-        allowed_client_redirect_uris=["http://localhost:*", "http://127.0.0.1:*"],
+        allowed_client_redirect_uris=["http://localhost:*", "http://127.0.0.1:*", "https://claude.ai/*"],
     )
 
     auth = MultiAuth(
