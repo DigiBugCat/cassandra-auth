@@ -129,10 +129,12 @@ def build_auth(
     if not domain.startswith(("http://", "https://")):
         domain = f"https://{domain}"
 
+    # Don't pass client_id — in DCR, WorkOS issues JWTs with aud set to the
+    # dynamically registered client ID, not the project-level client ID.
+    # Passing client_id here causes audience mismatch → 401 for claude.ai.
     authkit_provider = AuthKitProvider(
         authkit_domain=domain,
         base_url=base_url,
-        client_id=workos_client_id,
     )
 
     auth = MultiAuth(
