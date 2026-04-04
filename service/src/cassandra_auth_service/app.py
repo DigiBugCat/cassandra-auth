@@ -213,6 +213,60 @@ def create_app() -> FastAPI:
         await state.db.commit()
         return {"ok": True}
 
+    @app.patch("/keys/self/credentials")
+    async def self_update_credentials(request: Request, state: AuthState = Depends(get_state)):
+        """Self-service credential update — authenticates via MCP key in Authorization header.
+
+        Used by the cookie-sync Chrome extension. No X-Auth-Secret needed.
+        Merges provided credentials into the key's existing credentials.
+        Also syncs to per-user credentials so the OAuth path picks them up.
+        """
+        auth_header = request.headers.get("authorization", "")
+        if not auth_header.lower().startswith("bearer mcp_"):
+            raise HTTPException(401, "Bearer mcp_ token required")
+        key_id = auth_header.split(" ", 1)[1]
+
+        row = await state.db.fetchone(
+            "SELECT service, created_by, credentials_json FROM mcp_keys WHERE key_id = ?",
+            (key_id,),
+        )
+        if not row:
+            raise HTTPException(401, "invalid key")
+
+        body = await request.json()
+        new_creds = body.get("credentials")
+        if not isinstance(new_creds, dict):
+            raise HTTPException(400, "credentials must be an object")
+
+        # Merge into existing credentials
+        existing = json.loads(row["credentials_json"]) if row["credentials_json"] else {}
+        existing.update(new_creds)
+
+        await state.db.execute(
+            "UPDATE mcp_keys SET credentials_json = ? WHERE key_id = ?",
+            (json.dumps(existing), key_id),
+        )
+
+        # Also sync to per-user credentials so the WorkOS/OAuth path gets them
+        email = row["created_by"]
+        service = row["service"]
+        if email and service:
+            user_row = await state.db.fetchone(
+                "SELECT credentials_json FROM user_credentials WHERE email = ? AND service = ?",
+                (email, service),
+            )
+            user_creds = json.loads(user_row["credentials_json"]) if user_row and user_row["credentials_json"] else {}
+            user_creds.update(new_creds)
+            await state.db.execute(
+                "INSERT INTO user_credentials (email, service, credentials_json) VALUES (?, ?, ?)"
+                " ON CONFLICT(email, service) DO UPDATE SET credentials_json=excluded.credentials_json,"
+                " updated_at=datetime('now')",
+                (email, service, json.dumps(user_creds)),
+            )
+
+        await state.db.commit()
+        return {"ok": True, "service": service, "email": email}
+
     @app.delete("/keys/{key_id}", dependencies=[Depends(require_auth)])
     async def delete_key(key_id: str, state: AuthState = Depends(get_state)):
         await state.db.execute("DELETE FROM mcp_keys WHERE key_id = ?", (key_id,))
