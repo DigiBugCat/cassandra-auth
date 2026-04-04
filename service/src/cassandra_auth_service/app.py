@@ -201,18 +201,6 @@ def create_app() -> FastAPI:
         await state.db.commit()
         return {"ok": True}
 
-    @app.patch("/keys/{key_id}/credentials", dependencies=[Depends(require_auth)])
-    async def patch_key_credentials(key_id: str, request: Request, state: AuthState = Depends(get_state)):
-        """Update just the credentials on an existing key (used by portal credential sync)."""
-        body = await request.json()
-        credentials = body.get("credentials")
-        await state.db.execute(
-            "UPDATE mcp_keys SET credentials_json = ? WHERE key_id = ?",
-            (json.dumps(credentials) if credentials else None, key_id),
-        )
-        await state.db.commit()
-        return {"ok": True}
-
     @app.patch("/keys/self/credentials")
     async def self_update_credentials(request: Request, state: AuthState = Depends(get_state)):
         """Self-service credential update — authenticates via MCP key in Authorization header.
@@ -266,6 +254,18 @@ def create_app() -> FastAPI:
 
         await state.db.commit()
         return {"ok": True, "service": service, "email": email}
+
+    @app.patch("/keys/{key_id}/credentials", dependencies=[Depends(require_auth)])
+    async def patch_key_credentials(key_id: str, request: Request, state: AuthState = Depends(get_state)):
+        """Update just the credentials on an existing key (used by portal credential sync)."""
+        body = await request.json()
+        credentials = body.get("credentials")
+        await state.db.execute(
+            "UPDATE mcp_keys SET credentials_json = ? WHERE key_id = ?",
+            (json.dumps(credentials) if credentials else None, key_id),
+        )
+        await state.db.commit()
+        return {"ok": True}
 
     @app.delete("/keys/{key_id}", dependencies=[Depends(require_auth)])
     async def delete_key(key_id: str, state: AuthState = Depends(get_state)):
