@@ -124,8 +124,13 @@ def build_auth(
         service_id=service_id,
     )
 
+    # Ensure domain has https:// prefix (AuthKitProvider doesn't auto-prepend)
+    domain = workos_authkit_domain
+    if not domain.startswith(("http://", "https://")):
+        domain = f"https://{domain}"
+
     authkit_provider = AuthKitProvider(
-        authkit_domain=workos_authkit_domain,
+        authkit_domain=domain,
         base_url=base_url,
         client_id=workos_client_id,
     )
