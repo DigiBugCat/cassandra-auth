@@ -4,12 +4,83 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import Any
 
 import httpx
-from fastmcp.server.auth import AccessToken, AuthProvider, MultiAuth, TokenVerifier
+from fastmcp.server.auth import AccessToken, AuthProvider, JWTVerifier, MultiAuth, TokenVerifier
 from fastmcp.server.auth.providers.workos import AuthKitProvider
 
 logger = logging.getLogger(__name__)
+
+
+class UserInfoEnrichingVerifier(TokenVerifier):
+    """Wraps a TokenVerifier and enriches the AccessToken with email from the userinfo endpoint.
+
+    WorkOS AuthKit access token JWTs don't include the user's email in claims.
+    This wrapper calls the OIDC userinfo endpoint after JWT verification to
+    resolve the email, which is needed for per-tool ACL enforcement.
+    """
+
+    def __init__(
+        self,
+        *,
+        inner: TokenVerifier,
+        userinfo_url: str,
+        base_url: str | None = None,
+    ) -> None:
+        super().__init__(base_url=base_url)
+        self._inner = inner
+        self._userinfo_url = userinfo_url
+        self._client = httpx.AsyncClient(timeout=10)
+        self._cache: dict[str, dict[str, Any]] = {}
+
+    async def verify_token(self, token: str) -> AccessToken | None:
+        result = await self._inner.verify_token(token)
+        if result is None:
+            return None
+
+        # Already has email (e.g. from MCP key path) — skip userinfo
+        if result.claims.get("email"):
+            return result
+
+        # Check cache by sub
+        sub = result.claims.get("sub", "")
+        if sub and sub in self._cache:
+            user_info = self._cache[sub]
+        else:
+            # Call userinfo endpoint with the access token
+            try:
+                resp = await self._client.get(
+                    self._userinfo_url,
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+                if resp.status_code != 200:
+                    logger.warning("Userinfo request failed: %d", resp.status_code)
+                    return result
+                user_info = resp.json()
+                if sub:
+                    self._cache[sub] = user_info
+            except httpx.HTTPError:
+                logger.exception("Failed to fetch userinfo")
+                return result
+
+        # Merge userinfo into claims
+        enriched_claims = {**result.claims}
+        for field in ("email", "email_verified", "name", "given_name", "family_name"):
+            if field in user_info and field not in enriched_claims:
+                enriched_claims[field] = user_info[field]
+
+        return AccessToken(
+            token=result.token,
+            client_id=result.client_id,
+            scopes=result.scopes,
+            expires_at=result.expires_at,
+            claims=enriched_claims,
+        )
+
+    def close(self) -> None:
+        # Can't await in sync close, but httpx.AsyncClient handles this gracefully
+        pass
 
 
 @dataclass(slots=True)
@@ -132,9 +203,23 @@ def build_auth(
     # Don't pass client_id — in DCR, WorkOS issues JWTs with aud set to the
     # dynamically registered client ID, not the project-level client ID.
     # Passing client_id here causes audience mismatch → 401 for claude.ai.
+    #
+    # Wrap with UserInfoEnrichingVerifier so OAuth tokens get the user's email
+    # resolved via the OIDC userinfo endpoint. WorkOS access token JWTs don't
+    # include email in claims — ACL enforcement needs it.
+    userinfo_url = f"{domain}/oauth2/userinfo"
     authkit_provider = AuthKitProvider(
         authkit_domain=domain,
         base_url=base_url,
+        token_verifier=UserInfoEnrichingVerifier(
+            inner=JWTVerifier(
+                jwks_uri=f"{domain}/oauth2/jwks",
+                issuer=domain,
+                algorithm="RS256",
+            ),
+            userinfo_url=userinfo_url,
+            base_url=base_url,
+        ),
     )
 
     auth = MultiAuth(

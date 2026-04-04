@@ -187,6 +187,47 @@ async def test_key_patch_credentials(client):
     assert resp.json()["credentials"] is None
 
 
+async def test_key_validate_merges_user_credentials(client):
+    """Cookie-sync writes per-user creds; key validation should include them."""
+    meta = {"name": "twitter", "service": "twitter-mcp", "created_by": "user@test.com", "project_id": "p1"}
+    await client.put("/keys/mcp_tw", json=meta, headers=AUTH)
+
+    # Simulate cookie-sync: push per-user credentials (not on the key itself)
+    await client.post(
+        "/credentials/user@test.com/twitter-mcp",
+        json={"twitter_auth_token": "tok123", "twitter_ct0": "ct0val"},
+        headers=AUTH,
+    )
+
+    # Key validation should merge in per-user credentials
+    resp = await client.post("/keys/validate", json={"key": "mcp_tw"}, headers=AUTH)
+    creds = resp.json()["credentials"]
+    assert creds["twitter_auth_token"] == "tok123"
+    assert creds["twitter_ct0"] == "ct0val"
+
+
+async def test_key_validate_user_creds_override_key_creds(client):
+    """Per-user credentials (from cookie-sync) should override stale key credentials."""
+    meta = {
+        "name": "twitter", "service": "twitter-mcp",
+        "created_by": "user@test.com", "project_id": "p1",
+        "credentials": {"twitter_auth_token": "old", "twitter_ct0": "old"},
+    }
+    await client.put("/keys/mcp_tw2", json=meta, headers=AUTH)
+
+    # Cookie-sync pushes fresh cookies
+    await client.post(
+        "/credentials/user@test.com/twitter-mcp",
+        json={"twitter_auth_token": "fresh", "twitter_ct0": "fresh"},
+        headers=AUTH,
+    )
+
+    resp = await client.post("/keys/validate", json={"key": "mcp_tw2"}, headers=AUTH)
+    creds = resp.json()["credentials"]
+    assert creds["twitter_auth_token"] == "fresh"
+    assert creds["twitter_ct0"] == "fresh"
+
+
 # ── ACL admin ──
 
 async def test_acl_whoami(client):

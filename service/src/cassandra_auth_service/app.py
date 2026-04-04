@@ -172,11 +172,23 @@ def create_app() -> FastAPI:
         if not row:
             return JSONResponse({"valid": False}, status_code=404)
 
+        email = row["created_by"]
+        service = row["service"]
+
+        # Merge: key-level credentials + per-user credentials (user creds win)
+        key_creds = json.loads(row["credentials_json"]) if row["credentials_json"] else {}
+        user_row = await state.db.fetchone(
+            "SELECT credentials_json FROM user_credentials WHERE email = ? AND service = ?",
+            (email, service),
+        )
+        user_creds = json.loads(user_row["credentials_json"]) if user_row and user_row["credentials_json"] else {}
+        merged = {**key_creds, **user_creds} if key_creds or user_creds else None
+
         return {
             "valid": True,
-            "email": row["created_by"],
-            "service": row["service"],
-            "credentials": json.loads(row["credentials_json"]) if row["credentials_json"] else None,
+            "email": email,
+            "service": service,
+            "credentials": merged,
         }
 
     @app.put("/keys/{key_id}", dependencies=[Depends(require_auth)])
