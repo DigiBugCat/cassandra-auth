@@ -2,10 +2,12 @@
 
 from cassandra_mcp_auth.acl import CheckResponse, Enforcer, PolicyLine, load_enforcer
 from cassandra_mcp_auth.auth import McpKeyAuthProvider, McpKeyInfo, UserInfoEnrichingVerifier, build_auth
+from cassandra_mcp_auth.discovery import DiscoveryTransform
 from cassandra_mcp_auth.middleware import AclMiddleware
 
 __all__ = [
     "AclMiddleware",
+    "DiscoveryTransform",
     "CheckResponse",
     "Enforcer",
     "McpKeyAuthProvider",
