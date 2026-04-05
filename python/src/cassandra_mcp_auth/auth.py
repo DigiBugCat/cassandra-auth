@@ -25,55 +25,52 @@ class UserInfoEnrichingVerifier(TokenVerifier):
         self,
         *,
         inner: TokenVerifier,
-        userinfo_url: str,
+        workos_api_key: str,
         base_url: str | None = None,
     ) -> None:
         super().__init__(base_url=base_url)
         self._inner = inner
-        self._userinfo_url = userinfo_url
+        self._workos_api_key = workos_api_key
         self._client = httpx.AsyncClient(timeout=10)
-        self._cache: dict[str, dict[str, Any]] = {}
+        self._cache: dict[str, str] = {}  # sub → email
 
     async def verify_token(self, token: str) -> AccessToken | None:
         result = await self._inner.verify_token(token)
         if result is None:
             return None
 
-        # Already has email (e.g. from MCP key path) — skip userinfo
+        # Already has email (e.g. from MCP key path) — skip lookup
         if result.claims.get("email"):
             return result
 
-        # Check cache by sub
         sub = result.claims.get("sub", "")
-        logger.info("UserInfo enricher: sub=%s, existing claims keys=%s", sub, list(result.claims.keys()))
-        if sub and sub in self._cache:
-            user_info = self._cache[sub]
-            logger.info("UserInfo enricher: cache hit for sub=%s", sub)
-        else:
-            # Call userinfo endpoint with the access token
+        if not sub:
+            return result
+
+        # Resolve email from cache or WorkOS Management API
+        email = self._cache.get(sub)
+        if not email:
             try:
                 resp = await self._client.get(
-                    self._userinfo_url,
-                    headers={"Authorization": f"Bearer {token}"},
+                    f"https://api.workos.com/user_management/users/{sub}",
+                    headers={"Authorization": f"Bearer {self._workos_api_key}"},
                 )
                 if resp.status_code != 200:
-                    logger.warning("Userinfo request failed: %d", resp.status_code)
+                    logger.warning("WorkOS user lookup failed: %d %s", resp.status_code, resp.text[:200])
                     return result
-                user_info = resp.json()
-                logger.info("UserInfo enricher: response keys=%s email=%s", list(user_info.keys()), user_info.get("email"))
-                if sub:
-                    self._cache[sub] = user_info
+                user_data = resp.json()
+                email = user_data.get("email", "")
+                if email:
+                    self._cache[sub] = email
+                    logger.info("Resolved WorkOS user %s → %s", sub, email)
+                else:
+                    logger.warning("WorkOS user %s has no email", sub)
+                    return result
             except httpx.HTTPError:
-                logger.exception("Failed to fetch userinfo")
+                logger.exception("Failed to look up WorkOS user %s", sub)
                 return result
 
-        # Merge userinfo into claims
-        enriched_claims = {**result.claims}
-        for field in ("email", "email_verified", "name", "given_name", "family_name"):
-            if field in user_info and field not in enriched_claims:
-                enriched_claims[field] = user_info[field]
-        logger.info("UserInfo enricher: final email=%s", enriched_claims.get("email"))
-
+        enriched_claims = {**result.claims, "email": email}
         return AccessToken(
             token=result.token,
             client_id=result.client_id,
@@ -83,7 +80,6 @@ class UserInfoEnrichingVerifier(TokenVerifier):
         )
 
     def close(self) -> None:
-        # Can't await in sync close, but httpx.AsyncClient handles this gracefully
         pass
 
 
@@ -181,6 +177,7 @@ def build_auth(
     base_url: str,
     workos_client_id: str,
     workos_authkit_domain: str,
+    workos_api_key: str = "",
     # Deprecated — ignored, kept for call-site compat during rollout
     workos_client_secret: str = "",
 ) -> tuple[AuthProvider, McpKeyAuthProvider]:
@@ -211,19 +208,25 @@ def build_auth(
     # Wrap with UserInfoEnrichingVerifier so OAuth tokens get the user's email
     # resolved via the OIDC userinfo endpoint. WorkOS access token JWTs don't
     # include email in claims — ACL enforcement needs it.
-    userinfo_url = f"{domain}/oauth2/userinfo"
+    # Build token verifier — if WorkOS API key is available, wrap with
+    # enricher that resolves email from WorkOS Management API.
+    jwt_verifier = JWTVerifier(
+        jwks_uri=f"{domain}/oauth2/jwks",
+        issuer=domain,
+        algorithm="RS256",
+    )
+    token_verifier: TokenVerifier = jwt_verifier
+    if workos_api_key:
+        token_verifier = UserInfoEnrichingVerifier(
+            inner=jwt_verifier,
+            workos_api_key=workos_api_key,
+            base_url=base_url,
+        )
+
     authkit_provider = AuthKitProvider(
         authkit_domain=domain,
         base_url=base_url,
-        token_verifier=UserInfoEnrichingVerifier(
-            inner=JWTVerifier(
-                jwks_uri=f"{domain}/oauth2/jwks",
-                issuer=domain,
-                algorithm="RS256",
-            ),
-            userinfo_url=userinfo_url,
-            base_url=base_url,
-        ),
+        token_verifier=token_verifier,
     )
 
     auth = MultiAuth(
