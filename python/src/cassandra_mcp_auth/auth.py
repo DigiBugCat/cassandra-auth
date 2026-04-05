@@ -45,8 +45,10 @@ class UserInfoEnrichingVerifier(TokenVerifier):
 
         # Check cache by sub
         sub = result.claims.get("sub", "")
+        logger.info("UserInfo enricher: sub=%s, existing claims keys=%s", sub, list(result.claims.keys()))
         if sub and sub in self._cache:
             user_info = self._cache[sub]
+            logger.info("UserInfo enricher: cache hit for sub=%s", sub)
         else:
             # Call userinfo endpoint with the access token
             try:
@@ -58,6 +60,7 @@ class UserInfoEnrichingVerifier(TokenVerifier):
                     logger.warning("Userinfo request failed: %d", resp.status_code)
                     return result
                 user_info = resp.json()
+                logger.info("UserInfo enricher: response keys=%s email=%s", list(user_info.keys()), user_info.get("email"))
                 if sub:
                     self._cache[sub] = user_info
             except httpx.HTTPError:
@@ -69,6 +72,7 @@ class UserInfoEnrichingVerifier(TokenVerifier):
         for field in ("email", "email_verified", "name", "given_name", "family_name"):
             if field in user_info and field not in enriched_claims:
                 enriched_claims[field] = user_info[field]
+        logger.info("UserInfo enricher: final email=%s", enriched_claims.get("email"))
 
         return AccessToken(
             token=result.token,
