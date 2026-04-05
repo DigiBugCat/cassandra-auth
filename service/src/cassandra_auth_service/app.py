@@ -8,6 +8,8 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import httpx
+
 import casbin
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -124,7 +126,6 @@ def create_app() -> FastAPI:
         if not workos_api_key:
             raise HTTPException(503, "WORKOS_API_KEY not configured")
 
-        import httpx  # noqa: PLC0415
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.get(
