@@ -98,6 +98,61 @@ def create_app() -> FastAPI:
         allowed = state.check_access(sub, svc, tool)
         return {"allowed": allowed, "reason": "allowed by policy" if allowed else "denied"}
 
+    # ── OAuth user resolution ──
+
+    @app.post("/users/resolve", dependencies=[Depends(require_auth)])
+    async def resolve_user(request: Request, state: AuthState = Depends(get_state)):
+        """Resolve a WorkOS user ID (sub) to an email address.
+
+        Checks local cache first, then calls WorkOS Management API.
+        Caches the result in SQLite for future lookups.
+        """
+        body = await request.json()
+        sub = body.get("sub", "")
+        if not sub:
+            raise HTTPException(400, "sub is required")
+
+        # Check local cache
+        row = await state.db.fetchone(
+            "SELECT email FROM oauth_users WHERE sub = ?", (sub,)
+        )
+        if row:
+            return {"email": row["email"]}
+
+        # Call WorkOS Management API
+        workos_api_key = os.environ.get("WORKOS_API_KEY", "")
+        if not workos_api_key:
+            raise HTTPException(503, "WORKOS_API_KEY not configured")
+
+        import httpx  # noqa: PLC0415
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(
+                    f"https://api.workos.com/user_management/users/{sub}",
+                    headers={"Authorization": f"Bearer {workos_api_key}"},
+                )
+            if resp.status_code != 200:
+                logger.warning("WorkOS user lookup failed: %d %s", resp.status_code, resp.text[:200])
+                raise HTTPException(502, "WorkOS user lookup failed")
+            user_data = resp.json()
+            email = user_data.get("email", "")
+            if not email:
+                raise HTTPException(404, "WorkOS user has no email")
+        except httpx.HTTPError:
+            logger.exception("Failed to call WorkOS API for sub=%s", sub)
+            raise HTTPException(502, "WorkOS API error")
+
+        # Cache in SQLite
+        await state.db.execute(
+            "INSERT INTO oauth_users (sub, email) VALUES (?, ?)"
+            " ON CONFLICT(sub) DO UPDATE SET email=excluded.email, resolved_at=datetime('now')",
+            (sub, email),
+        )
+        await state.db.commit()
+        logger.info("Resolved WorkOS user %s → %s", sub, email)
+
+        return {"email": email}
+
     # ── Service credentials CRUD ──
 
     @app.post("/service-credentials/{service}", dependencies=[Depends(require_auth)])
