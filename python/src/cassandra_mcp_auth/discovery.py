@@ -36,22 +36,29 @@ from fastmcp.utilities.versions import VersionSpec
 
 
 def _sanitize(service_id: str) -> str:
-    """Convert service_id to a valid tool name prefix (underscore-separated)."""
-    return service_id.replace("-", "_").lower()
+    """Convert service_id to a valid tool name suffix (underscore-separated)."""
+    # Strip common suffixes so we don't end up with cass_twitter_mcp_search
+    cleaned = service_id.replace("-", "_").lower()
+    for suffix in ("_mcp", "_research"):
+        if cleaned.endswith(suffix):
+            cleaned = cleaned[: -len(suffix)]
+            break
+    return cleaned
 
 
 class DiscoveryTransform(CatalogTransform):
     """Transform that replaces all tools with namespaced discovery tools.
 
-    Discovery tools are prefixed with the service ID (e.g. market_search,
-    twitter_search) so each service's tools have unique names. No execute
-    tool. Underlying tools remain accessible via get_tool_catalog() for
-    the discovery tools to browse, but are never exposed directly.
+    Discovery tools are prefixed with `cass_<short_id>_` where short_id is
+    derived from the service_id with common suffixes stripped. Examples:
+        market-research → cass_market_tags, cass_market_search, cass_market_get_schema
+        twitter-mcp     → cass_twitter_tags, cass_twitter_search, ...
+        yt-mcp          → cass_yt_tags, cass_yt_search, ...
     """
 
     def __init__(self, service_id: str) -> None:
         super().__init__()
-        self._prefix = _sanitize(service_id)
+        self._prefix = f"cass_{_sanitize(service_id)}"
         self._discovery_tools: list[Tool] | None = None
 
     def _build_discovery_tools(self) -> list[Tool]:
